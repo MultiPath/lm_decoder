@@ -1,0 +1,11 @@
+Processing /private/home/jgu/work/lm_decoder
+Building wheels for collected packages: lm-decoder
+  Running setup.py bdist_wheel for lm-decoder: started
+  Running setup.py bdist_wheel for lm-decoder: finished with status 'done'
+  Stored in directory: /tmp/pip-ephem-wheel-cache-5qdc8_rg/wheels/55/37/cf/20ae27fd1e5a851e8e01bbbf73fd593564002506378b16f2b2
+Successfully built lm-decoder
+Installing collected packages: lm-decoder
+  Found existing installation: lm-decoder 0.1
+    Uninstalling lm-decoder-0.1:
+      Successfully uninstalled lm-decoder-0.1
+Successfully installed lm-decoder-0.1
