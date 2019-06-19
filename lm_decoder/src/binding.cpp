@@ -47,7 +47,17 @@ std::vector<size_t> argsort(const std::vector<T> &v)
   return idx;
 }
 
-float logsumexp(float x, float y, float g)
+float log_sum_exp(std::vector<float> &v, int begin, int end)
+{
+  float init = 0;
+  float max_elem = *std::max_element(v.begin() + begin, v.begin() + end);
+  float sum = std::accumulate(v.begin() + begin, v.begin() + end, init, 
+     [max_elem](float a, float b) { return a + std::exp(b - max_elem); });
+  return max_elem + std::log(sum);
+}
+
+
+float weighted_logsumexp(float x, float y, float g)
 {
   if (x > y){
     return x + std::log(g + (1 - g) * std::exp(y - x));
@@ -64,8 +74,13 @@ std::vector<float>
                at::Tensor &gates,
                at::Tensor &lens,
                const int beam_width,
-               int index)
+               int index,
+               const int type)
 {
+  // type = 0: mixture of experts: log( \alpha * p_TM + (1 - \alpha) * p_LM )
+  // type = 1: shallow fusion: \alpha * log p_TM + (1 - \alpha) * log p_LM (as scores)
+  // type = 2: simple fusion: log( softmax(\alpha * TM_scores + (1 - \alpha) * log p_LM (as scores)))
+
   auto probs_acc = probs.accessor<float, 3>();
   auto seqs_acc = seqs.accessor<int, 3>();
   auto lens_acc = lens.accessor<int, 1>();
@@ -98,16 +113,40 @@ std::vector<float>
     {
       for (size_t c = 0; c < num_candidates; c++)
       {
-        temp_scores[b * num_candidates + c] = cum_scores[b] + 
-          logsumexp(
-            std::log(probs_acc[index][t][c]), 
-            lm_scorer->get_base_log_prob(
-              states[b], 
-              lm_scorer->get_word(seqs_acc[index][t][c]), 
-              out_states[b * num_candidates + c]),
-            gates_acc[index][t]);
+        if (type == 0){
+          temp_scores[b * num_candidates + c] = cum_scores[b] + 
+            weighted_logsumexp(
+              std::log(probs_acc[index][t][c]), 
+              lm_scorer->get_base_log_prob(
+                states[b], 
+                lm_scorer->get_word(seqs_acc[index][t][c]), 
+                out_states[b * num_candidates + c]),
+              gates_acc[index][t]);
+        }
+        else if (type == 1){
+          temp_scores[b * num_candidates + c] = cum_scores[b] + 
+            gates_acc[index][t] * std::log(probs_acc[index][t][c]) +
+            (1 - gates_acc[index][t]) * lm_scorer->get_base_log_prob(
+              states[b], lm_scorer->get_word(seqs_acc[index][t][c]), out_states[b * num_candidates + c]);
+
+        }
+        else if (type == 2){
+          temp_scores[b * num_candidates + c] = 
+            gates_acc[index][t] * std::log(probs_acc[index][t][c]) +
+            (1 - gates_acc[index][t]) * lm_scorer->get_base_log_prob(
+              states[b], lm_scorer->get_word(seqs_acc[index][t][c]), out_states[b * num_candidates + c]);
+        }
+      }
+
+      if (type == 2){
+        float Z = log_sum_exp(temp_scores, b * num_candidates, (b + 1) * num_candidates);
+        for (size_t c = 0; c < num_candidates; c++)
+        {
+          temp_scores[b * num_candidates + c] = cum_scores[b] + temp_scores[b * num_candidates + c] - Z;
+        }
       }
     }
+     
     // top-k selection
     if (t > 0){
       idx = argtopk(temp_scores, beam_width);
@@ -162,7 +201,8 @@ beam_search(void *scorer,
             at::Tensor gates,
             at::Tensor lens,
             const int beam_width,
-            const int workers)
+            const int workers,
+            const int type)
 {
   Scorer *lm_scorer = NULL;
   if (scorer != NULL){
@@ -175,7 +215,7 @@ beam_search(void *scorer,
   if (batch_size == 1)
   {
     // single sentence testing.. no need to do multi-threads
-    all_scores.push_back(_beam_search_(lm_scorer, probs, seqs, gates, lens, beam_width, 0));
+    all_scores.push_back(_beam_search_(lm_scorer, probs, seqs, gates, lens, beam_width, 0, type));
     return all_scores;
   }
 
@@ -184,7 +224,7 @@ beam_search(void *scorer,
   for (size_t i = 0; i < batch_size; i++)
   {
     res.emplace_back(pool.enqueue(
-        _beam_search_, lm_scorer, probs, seqs, gates, lens, beam_width, i));
+        _beam_search_, lm_scorer, probs, seqs, gates, lens, beam_width, i, type));
   }
 
   // get decoding results

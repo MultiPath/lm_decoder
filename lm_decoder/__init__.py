@@ -29,24 +29,27 @@ class KenLMDecoder(object):
                                         masks,
                                         short_list=30,
                                         beam_size=5,
-                                        workers=20):
+                                        workers=20,
+                                        type='moe'):
         """
         inputs:
             mt_probs:  batch x seqlen x vocab (softmax results over a vocabulary)
             gates:     batch x seqlen 
             masks:     batch x seqlen
             short_list:  we do not check all the possible tokens. Only topN from the MT system is considered.
-        
+            type:      moe, shallow, simple
+
         return:
             best translation
         """
+        types = {'moe': 0, 'shallow': 1, 'simple': 2}
         probs, seqs = mt_probs.topk(short_list, 2)
         _seqs = seqs.cpu().int()
         scores = lm_decoder.beam_search(self.lm_scorer,
                                         probs.cpu().float(), _seqs,
                                         gates.cpu().float(),
                                         masks.sum(1).cpu().int(), beam_size,
-                                        workers)
+                                        workers, types[type])
         if seqs.is_cuda:
             _seqs = _seqs.cuda(seqs.get_device())
         _seqs = _seqs.type_as(seqs)
